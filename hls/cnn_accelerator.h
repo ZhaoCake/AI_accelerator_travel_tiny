@@ -1,7 +1,7 @@
 #ifndef CNN_ACCELERATOR_H
 #define CNN_ACCELERATOR_H
 
-// 使用相对路径包含Xilinx HLS头文件
+// 使用相对路径包含Xilinx HLS头文�?
 #include <ap_fixed.h>
 #include <ap_int.h>
 #include <hls_stream.h>

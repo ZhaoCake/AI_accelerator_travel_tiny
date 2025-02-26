@@ -1,11 +1,11 @@
 #include "cnn_accelerator.h"
 
-// ReLU激活函数
+// ReLU function
 data_t relu(data_t x) {
     return (x > ZERO) ? x : ZERO;
 }
 
-// 修改conv3x3函数为模板函数，支持不同大小的输入
+// Optimized conv3x3 function
 template<int H, int W>
 void conv3x3(
     data_t feature_map[H][W],
@@ -14,28 +14,24 @@ void conv3x3(
 ) {
     #pragma HLS ARRAY_PARTITION variable=weight complete dim=0
     
-    // 添加padding
-    data_t padded_map[H+2][W+2];
+    // Adding padding
+    data_t padded_map[H+2][W+2] = {ZERO}; // Initialize with zeros
     #pragma HLS ARRAY_PARTITION variable=padded_map cyclic factor=3 dim=2
     
     // Zero padding
-    Padding_Loop_Row: for(int i = 0; i < H+2; i++) {
-        Padding_Loop_Col: for(int j = 0; j < W+2; j++) {
-            #pragma HLS PIPELINE II=1
-            if(i == 0 || i == H+1 || j == 0 || j == W+1)
-                padded_map[i][j] = ZERO;
-            else
-                padded_map[i][j] = feature_map[i-1][j-1];
+    for(int i = 0; i < H; i++) {
+        for(int j = 0; j < W; j++) {
+            padded_map[i+1][j+1] = feature_map[i][j];
         }
     }
     
-    // 卷积计算
-    Conv_Loop_Row: for(int i = 0; i < H; i++) {
-        Conv_Loop_Col: for(int j = 0; j < W; j++) {
+    // Convolution calculation
+    for(int i = 0; i < H; i++) {
+        for(int j = 0; j < W; j++) {
             #pragma HLS PIPELINE II=1
             data_t sum = ZERO;
-            Conv_Loop_K1: for(int ki = 0; ki < KERNEL_SIZE; ki++) {
-                Conv_Loop_K2: for(int kj = 0; kj < KERNEL_SIZE; kj++) {
+            for(int ki = 0; ki < KERNEL_SIZE; ki++) {
+                for(int kj = 0; kj < KERNEL_SIZE; kj++) {
                     #pragma HLS UNROLL
                     sum += padded_map[i+ki][j+kj] * weight[ki][kj];
                 }
@@ -45,14 +41,14 @@ void conv3x3(
     }
 }
 
-// 修改max_pool函数，使其支持不同大小的输入
+// Optimized max_pool function
 template<int H, int W>
 void max_pool(
     data_t input_map[H][W],
     data_t output_map[H/2][W/2]
 ) {
-    Pool_Loop_Row: for(int i = 0; i < H/2; i++) {
-        Pool_Loop_Col: for(int j = 0; j < W/2; j++) {
+    for(int i = 0; i < H/2; i++) {
+        for(int j = 0; j < W/2; j++) {
             #pragma HLS PIPELINE II=1
             data_t max_val = input_map[i*2][j*2];
             max_val = (input_map[i*2][j*2+1] > max_val) ? input_map[i*2][j*2+1] : max_val;
@@ -63,7 +59,7 @@ void max_pool(
     }
 }
 
-// 主函数
+// Main function
 void cnn_accelerator(
     data_t input_img[IMG_HEIGHT][IMG_WIDTH],
     data_t output_result[FC2_OUT],
@@ -80,7 +76,7 @@ void cnn_accelerator(
     #pragma HLS INTERFACE s_axilite port=fc1_weight bundle=control
     #pragma HLS INTERFACE s_axilite port=fc2_weight bundle=control
     
-    // 中间结果缓存
+    // Intermediate result buffers
     static data_t conv1_out[CONV1_OUT_CH][IMG_HEIGHT][IMG_WIDTH];
     #pragma HLS ARRAY_PARTITION variable=conv1_out cyclic factor=2 dim=1
     
@@ -99,8 +95,8 @@ void cnn_accelerator(
     static data_t fc2_out[FC2_OUT];
     #pragma HLS ARRAY_PARTITION variable=fc2_out complete dim=1
 
-    // 第一层卷积
-    CONV1_LOOP: for(int oc = 0; oc < CONV1_OUT_CH; oc++) {
+    // First convolution layer
+    for(int oc = 0; oc < CONV1_OUT_CH; oc++) {
         conv3x3<IMG_HEIGHT, IMG_WIDTH>(input_img, conv1_weight[oc], conv1_out[oc]);
         // ReLU
         for(int i = 0; i < IMG_HEIGHT; i++) {
@@ -111,18 +107,18 @@ void cnn_accelerator(
         }
     }
     
-    // 第一层池化
-    POOL1_LOOP: for(int oc = 0; oc < CONV1_OUT_CH; oc++) {
+    // First pooling layer
+    for(int oc = 0; oc < CONV1_OUT_CH; oc++) {
         max_pool<IMG_HEIGHT, IMG_WIDTH>(conv1_out[oc], pool1_out[oc]);
     }
     
-    // 第二层卷积
-    CONV2_LOOP: for(int oc = 0; oc < CONV2_OUT_CH; oc++) {
+    // Second convolution layer
+    for(int oc = 0; oc < CONV2_OUT_CH; oc++) {
         data_t temp_out[IMG_HEIGHT/2][IMG_WIDTH/2] = {ZERO};
         for(int ic = 0; ic < CONV1_OUT_CH; ic++) {
             data_t conv_temp[IMG_HEIGHT/2][IMG_WIDTH/2];
             conv3x3<IMG_HEIGHT/2, IMG_WIDTH/2>(pool1_out[ic], conv2_weight[oc][ic], conv_temp);
-            // 累加所有输入通道的结果
+            // Accumulate results
             for(int i = 0; i < IMG_HEIGHT/2; i++) {
                 for(int j = 0; j < IMG_WIDTH/2; j++) {
                     #pragma HLS PIPELINE II=1
@@ -139,12 +135,12 @@ void cnn_accelerator(
         }
     }
     
-    // 第二层池化
-    POOL2_LOOP: for(int oc = 0; oc < CONV2_OUT_CH; oc++) {
+    // Second pooling layer
+    for(int oc = 0; oc < CONV2_OUT_CH; oc++) {
         max_pool<IMG_HEIGHT/2, IMG_WIDTH/2>(conv2_out[oc], pool2_out[oc]);
     }
     
-    // 展平数据
+    // Flatten data
     data_t flatten[CONV2_OUT_CH*8*8];
     int idx = 0;
     for(int c = 0; c < CONV2_OUT_CH; c++) {
@@ -156,8 +152,8 @@ void cnn_accelerator(
         }
     }
     
-    // 第一个全连接层
-    FC1_LOOP: for(int i = 0; i < FC1_OUT; i++) {
+    // First fully connected layer
+    for(int i = 0; i < FC1_OUT; i++) {
         data_t sum = ZERO;
         for(int j = 0; j < CONV2_OUT_CH*8*8; j++) {
             #pragma HLS PIPELINE II=1
@@ -166,8 +162,8 @@ void cnn_accelerator(
         fc1_out[i] = relu(sum);
     }
     
-    // 第二个全连接层
-    FC2_LOOP: for(int i = 0; i < FC2_OUT; i++) {
+    // Second fully connected layer
+    for(int i = 0; i < FC2_OUT; i++) {
         data_t sum = ZERO;
         for(int j = 0; j < FC1_OUT; j++) {
             #pragma HLS PIPELINE II=1
@@ -176,8 +172,8 @@ void cnn_accelerator(
         fc2_out[i] = sum;
     }
     
-    // 输出结果
-    Write_Output_Loop: for(int i = 0; i < FC2_OUT; i++) {
+    // Output results
+    for(int i = 0; i < FC2_OUT; i++) {
         #pragma HLS PIPELINE II=1
         output_result[i] = fc2_out[i];
     }
